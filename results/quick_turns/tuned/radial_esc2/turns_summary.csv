@@ -1,0 +1,2 @@
+mode,reacting_mean,reacting_std,reacting_max,dissent_mean,dissent_std,dissent_max,turn_rate_mean,turn_rate_std,turn_rate_max,density_mean,density_std,density_max,M_mean,M_std,M_max,clusters_5_mean,clusters_5_std,clusters_5_max,C_mean,C_std,C_max,Phi_mean,Phi_std,Phi_max,aspect_mean,aspect_std,aspect_max,nn_mean,nn_std,nn_max,attacks
+imposed,0.029,0.107,0.818,0.323,0.153,0.743,11.704,9.877,65.363,0.528,0.112,0.815,0.022,0.019,0.107,2.36,0.713,3.333,0.838,0.093,0.999,0.744,0.13,0.948,1.876,0.471,3.417,1.0,0.001,1.02,11.333
