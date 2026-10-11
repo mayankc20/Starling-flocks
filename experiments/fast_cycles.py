@@ -10,6 +10,7 @@ for P from 2 s to 200 s. The response of each measure is the amplitude of its co
 (and the phase lag behind the drive).
 
     python experiments/fast_cycles.py
+    V0=2 MU=0.8 PERIODS=50,100 python experiments/fast_cycles.py   # faster agents, shorter memory
     QUICK=1 python experiments/fast_cycles.py
 
 Results go to FAST_OUT (default output/fast_cycles).
@@ -38,6 +39,12 @@ if QUICK:
     N, WARM, RUN, PERIODS, SEEDS, MOVIE_STEPS = 60, 100, 200, [20, 100], [7000], 100
 FAST_OUT = os.environ.get("FAST_OUT", os.path.join(os.path.dirname(__file__), "..", "output", "fast_cycles"))
 N_JOBS = int(os.environ.get("N_JOBS", os.cpu_count() or 1))
+V0 = float(os.environ.get("V0", fm.BASE["v0"]))     # body lengths per step (0.5 = 5 body lengths/s)
+MU = float(os.environ.get("MU", fm.BASE["mu"]))     # perceptual memory per step
+if "PERIODS" in os.environ:
+    PERIODS = [int(x) for x in os.environ["PERIODS"].split(",")]
+if "SEEDS" in os.environ:
+    SEEDS = [int(x) for x in os.environ["SEEDS"].split(",")]
 KEYS = ["density", "M", "clusters_5", "aspect", "Phi", "nn"]
 
 
@@ -49,7 +56,7 @@ def drive(t, P):
 
 
 def one(P, seed, film):
-    p = fm.job_params([("N", N)])
+    p = fm.job_params([("N", N), ("v0", V0), ("mu", MU)])
     case = fm.CASES["full"]
     dirs = np.linspace(0, 2 * np.pi, p["n_dir"], endpoint=False)
     grid = (dirs, np.cos(dirs), np.sin(dirs))
@@ -140,7 +147,7 @@ def movie(kind, fr, path, half=35.0):
         q = ax.quiver(Y[:, 0], Y[:, 1], np.cos(th), np.sin(th), color=cols, angles="xy", scale_units="xy",
                       scale=0.6, width=0.005, headwidth=3, headlength=3)
         ax.set_xlim(-half, half); ax.set_ylim(-half, half)
-        title.set_text(f"cycle period {MOVIE_P * DT:g} s   time {(t - fr[0][0]) * DT:5.1f} s   w = {w:.2f}   δ = {d:.2f}")
+        title.set_text(f"v0 = {V0 * 10:g} bl/s  μ = {MU:g}  period {MOVIE_P * DT:g} s   time {(t - fr[0][0]) * DT:5.1f} s   w = {w:.2f}   δ = {d:.2f}")
         return [q, title]
 
     anim = animation.FuncAnimation(fig, draw, frames=len(fr), blit=False)
@@ -155,9 +162,9 @@ if __name__ == "__main__":
     outs = Parallel(n_jobs=N_JOBS, verbose=5)(delayed(one)(P, s, P == MOVIE_P and s == SEEDS[0]) for P, s in jobs)
     ts = pd.DataFrame([r for rows, _ in outs for r in rows])
     ts.to_csv(os.path.join(FAST_OUT, "fast_timeseries.csv"), index=False)
-    resp = pd.DataFrame([dict(P=P, period_s=P * DT, seed=s, **response(d, P)) for (P, s), d in ts.groupby(["P", "seed"])])
+    resp = pd.DataFrame([dict(P=P, period_s=P * DT, seed=s, v0=V0, mu=MU, **response(d, P)) for (P, s), d in ts.groupby(["P", "seed"])])
     resp.to_csv(os.path.join(FAST_OUT, "fast_response_per_run.csv"), index=False)
-    summ = resp.drop(columns="seed").groupby(["P", "period_s"]).mean().round(3)
+    summ = resp.drop(columns="seed").groupby(["v0", "mu", "P", "period_s"]).mean().round(3)
     summ.to_csv(os.path.join(FAST_OUT, "fast_response_summary.csv"))
     response_plot(resp, os.path.join(FAST_OUT, "fast_response.png"))
     traces_plot(ts, os.path.join(FAST_OUT, "fast_traces.png"))

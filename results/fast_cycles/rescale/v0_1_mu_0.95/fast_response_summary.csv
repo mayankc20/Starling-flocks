@@ -1,0 +1,3 @@
+v0,mu,P,period_s,density_amp,density_lag_s,density_mean,M_amp,M_lag_s,M_mean,clusters_5_amp,clusters_5_lag_s,clusters_5_mean,aspect_amp,aspect_lag_s,aspect_mean,Phi_amp,Phi_lag_s,Phi_mean,nn_amp,nn_lag_s,nn_mean
+1.0,0.95,50,5.0,0.041,3.953,0.656,0.001,1.616,0.021,0.0,0.0,3.0,0.062,3.91,1.808,0.025,0.559,0.929,0.0,1.107,1.0
+1.0,0.95,100,10.0,0.078,7.04,0.655,0.001,1.951,0.019,0.0,0.0,3.0,0.095,6.864,1.728,0.029,0.597,0.915,0.0,1.544,1.0
