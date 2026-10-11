@@ -12,6 +12,7 @@ Schedules (after WARM steps at w = 0.8, delta0 = 0.3):
   constant   w = 0.8, delta0 = 0.3 (control)
   breathing  w(t) = 0.84 + 0.12 sin(2 pi t / P), delta0(t) = 0.3 + 0.25 sin(2 pi t / P):
              tight and segregated (w 0.72, delta0 0.05) <-> loose and mixed (w 0.96, delta0 0.55)
+  delta_sine w = 0.8 fixed, delta0(t) = 0.4 - 0.1 cos(2 pi t / P), i.e. 0.3 to 0.5
   deep       slower and wider: period 2P, w in [0.75, 1.0], delta0 in [0.0, 0.66] (0.66: kind ignored)
   drift      w and delta0 follow independent slow random walks pulled back to a centre
              (Ornstein-Uhlenbeck), w in [0.6, 1.0], delta0 in [0.0, 0.6]
@@ -37,6 +38,7 @@ from w_sweep import shape
 
 QUICK = os.environ.get("QUICK", "0") == "1"
 N, WARM, T, P, EVERY, FRAME_EVERY = 240, 1000, 9000, 2000, 25, 10
+P = int(os.environ.get("P", P))
 SEEDS = [6000, 6001, 6002]
 SCHEDULES = os.environ.get("SCHEDULES", "constant,breathing,drift").split(",")
 if QUICK:
@@ -55,6 +57,8 @@ def schedule(name, seed):
     if name == "breathing":
         ph = np.sin(2 * np.pi * s / P)
         w[on], dl[on] = 0.84 + 0.12 * ph, D0 + 0.25 * ph
+    elif name == "delta_sine":                          # w fixed, delta0 between 0.3 and 0.5, starting at 0.3
+        w[on], dl[on] = W0, 0.4 - 0.1 * np.cos(2 * np.pi * s / P)
     elif name == "deep":
         ph = np.sin(2 * np.pi * s / (2 * P))
         w[on], dl[on] = 0.875 + 0.125 * ph, 0.33 + 0.33 * ph
