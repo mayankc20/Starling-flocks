@@ -1,0 +1,2 @@
+schedule,w_mean,w_std,w_min,w_max,delta0_mean,delta0_std,delta0_min,delta0_max,density_mean,density_std,density_min,density_max,M_mean,M_std,M_min,M_max,clusters_5_mean,clusters_5_std,clusters_5_min,clusters_5_max,C_mean,C_std,C_min,C_max,Phi_mean,Phi_std,Phi_min,Phi_max,aspect_mean,aspect_std,aspect_min,aspect_max
+deep,0.875,0.088,0.75,1.0,0.33,0.233,0.0,0.66,0.551,0.23,0.246,1.025,0.204,0.23,0.0,0.701,1.772,0.821,1,3,0.981,0.078,0.667,1.0,0.956,0.025,0.858,0.983,1.702,0.431,1.022,2.921

@@ -1,0 +1,4 @@
+schedule,w_mean,w_std,w_min,w_max,delta0_mean,delta0_std,delta0_min,delta0_max,density_mean,density_std,density_min,density_max,M_mean,M_std,M_min,M_max,clusters_5_mean,clusters_5_std,clusters_5_min,clusters_5_max,C_mean,C_std,C_min,C_max,Phi_mean,Phi_std,Phi_min,Phi_max,aspect_mean,aspect_std,aspect_min,aspect_max
+breathing,0.84,0.085,0.72,0.96,0.3,0.177,0.05,0.55,0.62,0.213,0.243,1.027,0.1,0.181,0.0,0.701,2.172,0.907,1,3,1.0,0.0,1.0,1.0,0.955,0.021,0.865,0.983,1.787,0.425,1.016,3.102
+constant,0.8,0.0,0.8,0.8,0.3,0.0,0.3,0.3,0.713,0.145,0.407,0.97,0.052,0.124,0.0,0.701,2.523,0.8,1,3,1.0,0.0,1.0,1.0,0.955,0.011,0.914,0.979,1.818,0.358,1.043,2.975
+drift,0.819,0.083,0.615,1.0,0.279,0.134,0.0,0.6,0.679,0.16,0.336,1.011,0.088,0.162,0.0,0.701,2.352,0.889,1,3,1.0,0.0,1.0,1.0,0.954,0.018,0.879,0.982,1.739,0.406,1.007,2.992
