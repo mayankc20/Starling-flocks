@@ -10,6 +10,9 @@ What changes from 2D:
 Everything else is unchanged: n partners sampled from the view in proportion to similarity (delta0), own heading with
 amplitude 1, partners' headings with sqrt(w), partners' bearings with sqrt(1 - w) and a minus sign for other kinds,
 Born rule with memory mu, speed v0, overlap removal at r0.  w may be per agent (shape (N, 1)) and mu = 0 gives no memory.
+
+Optional gravity (p["gamma"] > 0, default 0): climbing and diving cost effort, so every perceptual state is weighted by
+exp[-(gamma/2) u_z^2] before it is squared; headings then stay within about 1/sqrt(2 gamma) rad of the horizontal.
 """
 import numpy as np
 from scipy.spatial import cKDTree, ConvexHull
@@ -45,6 +48,12 @@ def start3d(p, seed):
 
 
 def step3d(X, U, mem, kind, S, rng, grid, p):
+    U, mem = choose3d(X, U, mem, kind, S, rng, grid, p)
+    return move3d(X, U, p["v0"], p), U, mem
+
+
+def choose3d(X, U, mem, kind, S, rng, grid, p):
+    """Steps 1-4 of the model: the heading each agent picks (unit vectors) and the new perceptual states."""
     D, spacing = grid
     N, n = len(U), p["n"]
 
@@ -80,6 +89,8 @@ def step3d(X, U, mem, kind, S, rng, grid, p):
     states = (direction.astype(np.float32) @ D.T.astype(np.float32))                # (N, 1 + 2n, n_dir)
     states = np.exp((half * (states - 1)).astype(np.float32))
     percept = np.matmul(amplitude.astype(np.float32)[:, None, :], states)[:, 0, :].astype(float)
+    if p.get("gamma", 0):
+        percept *= np.exp(-0.5 * p["gamma"] * D[:, 2] ** 2)[None, :]
     percept /= np.linalg.norm(percept, axis=1, keepdims=True)
     mu = p["mu"]
     mem = percept if (mem is None or mu == 0) else np.sqrt(mu) * mem + np.sqrt(1 - mu) * percept
@@ -89,9 +100,12 @@ def step3d(X, U, mem, kind, S, rng, grid, p):
     pick = np.minimum((cdf < rng.random((N, 1)) * cdf[:, -1:]).sum(1), len(D) - 1)
     U = D[pick] + spacing * (rng.random((N, 3)) - 0.5)
     U /= np.linalg.norm(U, axis=1, keepdims=True)
+    return U, mem
 
-    # 5. Move, then remove overlaps.
-    X = X + p["v0"] * U
+
+def move3d(X, U, v, p):
+    """Step 5: move by v (scalar or per agent) along U, then remove overlaps."""
+    X = X + np.reshape(v, (-1, 1)) * U
     for _ in range(p["passes"]):
         pairs = cKDTree(X).query_pairs(p["r0"], output_type="ndarray")
         if not len(pairs):
@@ -102,7 +116,7 @@ def step3d(X, U, mem, kind, S, rng, grid, p):
         push = 0.5 * (p["r0"] - L) * d / L
         np.add.at(X, i, -push)
         np.add.at(X, j, push)
-    return X, U, mem
+    return X
 
 
 def shape_nd(X, U, kind, p):
