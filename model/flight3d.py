@@ -5,15 +5,20 @@ What the bird or drone can then do with the chosen heading U_want is limited by 
   * turning sideways needs a bank angle phi with tan(phi) = v * omega / g (coordinated turn); |phi| <= bank_max and phi
     can change by at most roll_rate per second, so turns are capped and cannot start or stop instantly;
   * pitching up or down is capped at pitch_rate per second;
-  * speed follows energy: dv/dt = -g u_z + (v0 - v) / tau  (slows when climbing, speeds up when diving, relaxes to cruise).
+  * speed follows energy: dv/dt = -g u_z + (v0 - v) / tau  (slows when climbing, speeds up when diving, relaxes to cruise);
+  * optional speed control from the K_SPEED nearest neighbours:  + k_match (mean neighbour speed - v)
+    + k_keep (mean distance of those neighbours ahead along the own heading) * dt   [k_match, k_keep per second].
 Units: lengths in body lengths (r0 = 1, of L_m metres), one step = dt seconds.  g in body lengths per step^2 is
 g_ms2 * dt^2 / L_m.  A quadrotor (turns without banking) is bank_max_deg = 89.9, roll_rate_deg_s = 1e6.
 """
 import numpy as np
+from scipy.spatial import cKDTree
 import flock3d as f3
 
 FLIGHT = dict(L_m=0.25, dt=0.1, g_ms2=9.81, bank_max_deg=60.0, roll_rate_deg_s=360.0, pitch_rate_deg_s=90.0,
-              tau_s=1.0, v_min=0.4, v_max=2.0)     # v_min, v_max: speed limits as multiples of v0
+              tau_s=1.0, v_min=0.4, v_max=2.0,      # v_min, v_max: speed limits as multiples of v0
+              k_match=0.0, k_keep=0.0)
+K_SPEED = 6
 
 
 def g_model(p):
@@ -53,7 +58,13 @@ def step_flight(X, U, v, bank, mem, kind, S, rng, grid, p):
     U /= np.linalg.norm(U, axis=1, keepdims=True)
 
     # speed: climbing costs speed, diving gives it, drag brings it back to cruise
-    v = v - g * U[:, 2] + (p["v0"] - v) * p["dt"] / p["tau_s"]
+    v_new = v - g * U[:, 2] + (p["v0"] - v) * p["dt"] / p["tau_s"]
+    if p.get("k_match", 0) or p.get("k_keep", 0):
+        k = min(K_SPEED, len(X) - 1)
+        nb = cKDTree(X).query(X, k + 1)[1][:, 1:]
+        ahead = np.einsum("ikj,ij->ik", X[nb] - X[:, None, :], U).mean(1)
+        v_new += p["dt"] * (p["k_match"] * (v[nb].mean(1) - v) + p["k_keep"] * ahead * p["dt"])
+    v = v_new
     v = np.clip(v, p["v_min"] * p["v0"], p["v_max"] * p["v0"])
     X = f3.move3d(X, U, v, p)
     return X, U, v, bank, mem, yaw

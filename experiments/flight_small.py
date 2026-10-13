@@ -5,6 +5,7 @@ Conditions, all at cruise speed V0 body lengths per step (default 2, i.e. 5 m/s 
   gravity   3D model with the gravity weight gamma on the perceptual states, constant speed
   flight    gravity weight + banked turns + speed that changes with climb (FLIGHT defaults)
   quad      gravity weight + speed with climb, turns without banking (a quadrotor), same pitch cap
+  flight_sc flight + speed control from the 6 nearest: match their speed (k_match = 2/s), close gaps ahead (k_keep = 3/s)
 Start: mixed ball, headings within about 20 deg of +x and nearly level (a group already in flight).
 Measures (every second, after BURN): those of small_groups.py plus turn rate (deg/s), |bank| (deg), speed spread.
 
@@ -33,10 +34,10 @@ DT, W, V0, GAMMA = 0.1, 0.8, float(os.environ.get("V0", 2.0)), 10.0
 R_SIGHT = float(os.environ.get("R_SIGHT", 100.0))   # body lengths; at 25 (the base value) groups at this speed break up
 SIZES = [int(x) for x in os.environ.get("SIZES", "10,20,30,50").split(",")]
 DELTAS = [float(x) for x in os.environ.get("DELTAS", "0.3,0.65").split(",")]
-CONDS = os.environ.get("CONDS", "free,gravity,flight,quad").split(",")
+CONDS = os.environ.get("CONDS", "free,gravity,flight,quad,flight_sc").split(",")
 SEEDS = list(range(8100, 8105))
 T, EVERY, BURN = int(os.environ.get("T", 3000)), sg.EVERY, 1000
-FILM = [("flight", 30, 0.3), ("free", 30, 0.3), ("flight", 30, 0.65)]
+FILM = [("flight", 30, 0.3), ("free", 30, 0.3), ("flight", 30, 0.65), ("flight_sc", 30, 0.3)]
 if os.environ.get("QUICK", "0") == "1":
     SIZES, DELTAS, SEEDS, T, BURN, FILM = [10, 30], [0.3], [8100], 200, 50, [("flight", 10, 0.3)]
     sg.BURN = BURN
@@ -48,6 +49,8 @@ def one(cond, N, delta, seed, film):
     p = dict(f3.BASE3, **fl.FLIGHT, N=N, w=W, delta0=delta, v0=V0, R=R_SIGHT, gamma=0.0 if cond == "free" else GAMMA)
     if cond == "quad":
         p.update(bank_max_deg=89.9, roll_rate_deg_s=1e6)
+    if cond == "flight_sc":
+        p.update(k_match=2.0, k_keep=3.0)
     grid = f3.sphere_grid(p["n_dir3"])
     X, U, kind, rng = f3.start3d(p, seed)
     U = np.array([1.0, 0.0, 0.0]) + 0.3 * U                                 # start mixed but flying roughly one way, level
@@ -64,7 +67,7 @@ def one(cond, N, delta, seed, film):
         if film and t % 2 == 0 and BURN <= t < BURN + 600:
             fr.append((t, X.astype(np.float32), U.astype(np.float32)))
         if t < T:
-            if cond in ("flight", "quad"):
+            if cond in ("flight", "quad", "flight_sc"):
                 X, U, v, bank, mem, yaw = fl.step_flight(X, U, v, bank, mem, kind, S, rng, grid, p)
             else:
                 U0 = U
@@ -79,7 +82,7 @@ def plot(summ, path):
             ("rg_cv", "spacing fluctuation (CV of group radius)"), ("Phi", "polarization Φ"),
             ("thick", "flatness: height sd / horizontal sd"), ("turn", "mean turn rate (deg/s)"),
             ("M", "mixing M (5 nearest)"), ("largest", "share in largest contact cluster")]
-    cols = {"free": "#8a8a86", "gravity": "#2a78d6", "flight": "#eb6834", "quad": "#1baf7a"}
+    cols = {"free": "#8a8a86", "gravity": "#2a78d6", "flight": "#eb6834", "quad": "#1baf7a", "flight_sc": "#4a3aa7"}
     fig, axes = plt.subplots(2, 4, figsize=(14, 6))
     for ax, (k, lab) in zip(axes.flat, keys):
         for c in CONDS:
