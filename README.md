@@ -11,6 +11,8 @@ Extensions of the mixed-flock model of *Segregation with cohesion* (Chaurasiya, 
 | `experiments/small_groups.py` | Groups of 10-50 in 2D, 3D and 3D with gravity: neighbour switching and spacing. |
 | `experiments/flight_small.py` | Groups of 10-50 with flight constraints (free, gravity, banking + speed, quadrotor). |
 | `experiments/flock3d_compare.py` | 3D against 2D at w = 0.8, δ = 0.3-0.65, a few values of w, and a δ cycle; snapshots, videos, metrics. |
+| `model/mindflock3d.py` | MIND-FLOCK in 3D for drone swarms: shared sensing limits (range, view, noise, latency, link loss, failures), vehicle limits, collision counting, and baselines (boids, Vicsek, Olfati-Saber, signed variants, no minus sign). |
+| `experiments/mindflock_compare.py`, `experiments/mindflock_plots.py` | MIND-FLOCK against the baselines: main comparison, δ, partners, robustness, group size; results in `results/mindflock3d/SUMMARY.md`. |
 
 ## Run
 
@@ -28,3 +30,11 @@ python experiments/flock3d_compare.py           # 2D and 3D runs, figures, video
 ```
 
 Results go to `output/flock3d/` (set `F3_OUT` to change).
+
+```
+QUICK=1 python experiments/mindflock_compare.py   # tiny check, a few minutes
+python experiments/mindflock_compare.py           # all sweeps, about 30 min on 4 cores
+python experiments/mindflock_plots.py             # figures (VIDEO=1 for videos)
+```
+
+Results go to `output/mindflock3d/` (set `MF_OUT` to change).
