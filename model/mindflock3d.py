@@ -150,7 +150,9 @@ def nearest_k(dist, k):
 
 # ---------------------------------------------------------------- controllers
 
-def ctrl_mindflock(i_state, obs, kind, S, rng, grid, p, minus=True):
+def ctrl_mindflock(i_state, obs, kind, S, rng, grid, p, minus=True, extra=None, return_partners=False):
+    """extra: optional (dirs (N, k, 3), amps (N, k)) of further bumps, e.g. a goal direction for informed drones.
+    return_partners: also return (partners, found), for rules that reuse the attended partners (speed)."""
     X, V, mem = i_state
     rel, Vobs, dist, vis = obs
     D, spacing = grid
@@ -178,6 +180,9 @@ def ctrl_mindflock(i_state, obs, kind, S, rng, grid, p, minus=True):
     esc = np.where(nfound[:, :, None], -unit(rel[rows, near]), 0.0)
     amp = np.c_[amp, p["a_avoid"] * g]
     direction = np.concatenate([U[:, None, :], heads, bearing, esc], axis=1)
+    if extra is not None:
+        direction = np.concatenate([direction, extra[0]], axis=1)
+        amp = np.c_[amp, extra[1]]
     half = 0.5 * p["lam"]
     states = direction.astype(np.float32) @ D.T.astype(np.float32)
     states = np.exp((half * (states - 1)).astype(np.float32))
@@ -192,6 +197,8 @@ def ctrl_mindflock(i_state, obs, kind, S, rng, grid, p, minus=True):
     cdf = np.cumsum(prob, axis=1)
     pick = np.minimum((cdf < rng.random((N, 1)) * cdf[:, -1:]).sum(1), len(D) - 1)
     Ud = unit(D[pick] + spacing * (rng.random((N, 3)) - 0.5))
+    if return_partners:
+        return p["v0"] * Ud, mem, (partners, found)
     return p["v0"] * Ud, mem
 
 
