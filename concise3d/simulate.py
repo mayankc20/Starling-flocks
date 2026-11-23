@@ -1,6 +1,6 @@
 """Run one flock through a moving obstacle and make the video.
 
-    python simulate.py                     # defaults: N=30, d_safe=3 BL, seed 1 -> out/
+    python simulate.py                     # defaults: N=30, d_safe=5 BL, arrows 2 BL, seed 1 -> out/
     python simulate.py --d_safe 4 --N 20 --seed 2 --out out_d4
 
 Outputs (in --out):  flock_obstacle.mp4   the 3D video, camera follows the flock
@@ -19,7 +19,8 @@ from model import Flock, unit
 ap = argparse.ArgumentParser()
 ap.add_argument("--N", type=int, default=30)
 ap.add_argument("--seed", type=int, default=1)
-ap.add_argument("--d_safe", type=float, default=3.0, help="minimum distance between agents kept by the velocity-level safety filter (BL)")
+ap.add_argument("--d_safe", type=float, default=5.0, help="minimum distance between agents kept by the velocity-level safety filter (BL)")
+ap.add_argument("--arrow", type=float, default=2.0, help="drawn arrow length (BL)")
 ap.add_argument("--T", type=int, default=1200, help="steps (0.1 s each)")
 ap.add_argument("--launch", type=int, default=300, help="step at which the obstacle appears ahead")
 ap.add_argument("--every", type=int, default=2, help="video frame every k steps")
@@ -27,10 +28,10 @@ ap.add_argument("--out", default="out")
 a = ap.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
-# drawn arrow length: shorter than d_safe, so two arrows (each inside a ball of radius L/2) can never touch
-ARROW = 2.0 * a.d_safe / 3.0
+# drawn arrow length (fixed, BL); as long as it is shorter than d_safe two arrows can never touch
+ARROW = a.arrow
 f = Flock(dict(N=a.N, d_safe=a.d_safe, r_avoid=2 * a.d_safe), seed=a.seed)
-LINK = 1.7 * f.p["r_avoid"]       # agents closer than this belong to the same group (10 BL at d_safe = 3)
+LINK = 1.7 * f.p["r_avoid"]       # agents closer than this belong to the same group (17 BL at d_safe = 5)
 
 
 def n_groups(lab, min_size=2):
@@ -79,7 +80,7 @@ plt.close(fig)
 
 # ------------------------------------------------------------------ video
 COL = np.array(["#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e"])
-HALF = 32.0
+HALF = 40.0
 fig = plt.figure(figsize=(9, 8.2))
 ax3 = fig.add_axes([0.0, 0.25, 1.0, 0.75], projection="3d")
 axg = fig.add_axes([0.1, 0.06, 0.82, 0.16])
