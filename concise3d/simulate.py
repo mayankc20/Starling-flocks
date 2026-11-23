@@ -100,10 +100,24 @@ def draw(k):
     cen_s = 0.9 * cen_s + 0.1 * X.mean(0)          # smoothed camera centre
     ax3.cla()
     U = unit(V) * ARROW
-    P = X - U / 2                                   # arrows centred on the agent
-    ax3.quiver(P[:, 0], P[:, 1], P[:, 2], U[:, 0], U[:, 1], U[:, 2], colors=COL[f.kind % 5],
-               arrow_length_ratio=0.4, linewidth=1.6)
-    ax3.scatter(X[:, 0], X[:, 1], X[:, 2], s=6, c=COL[f.kind % 5], depthshade=False)
+    P = X - U / 2                                   # arrows centred on the agent, length ARROW in BL (data units)
+    # depth cue: a 2D picture of a 3D flock always shows agents at different depths on top of each other.
+    # Nearer agents are drawn darker and thicker, and each has a drop line + shadow on the floor, so overlap on
+    # screen can be told apart from contact (which the safety filter rules out).
+    el, az = np.deg2rad(25), np.deg2rad(-60 + 0.05 * t)
+    toward_cam = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+    depth = (X - cen_s) @ toward_cam
+    near = np.clip(0.5 + depth / (2 * HALF), 0, 1)  # 1 = nearest to the camera
+    rgba = matplotlib.colors.to_rgba_array(COL[f.kind % 5])
+    rgba[:, 3] = 0.3 + 0.7 * near
+    order = np.argsort(near)                        # far first, near drawn on top
+    floor = cen_s[2] - HALF
+    for i in order:
+        ax3.plot([X[i, 0]] * 2, [X[i, 1]] * 2, [floor, X[i, 2]], color="0.75", lw=0.5)
+    ax3.scatter(X[:, 0], X[:, 1], np.full(len(X), floor), s=4, c="0.6", depthshade=False)
+    for i in order:
+        ax3.quiver(P[i, 0], P[i, 1], P[i, 2], U[i, 0], U[i, 1], U[i, 2], colors=[rgba[i]],
+                   arrow_length_ratio=0.4, linewidth=0.8 + 1.8 * near[i])
     if oc is not None:
         r = f.p["obs_radius"]
         ax3.plot_surface(oc[0] + r * sph[0], oc[1] + r * sph[1], oc[2] + r * sph[2],
@@ -113,8 +127,9 @@ def draw(k):
     ax3.set_box_aspect((1, 1, 1))
     ax3.set_xlabel("x (BL)"); ax3.set_ylabel("y (BL)"); ax3.set_zlabel("z (BL)")
     ax3.view_init(elev=25, azim=-60 + 0.05 * t)
+    ax3.set_proj_type("persp", focal_length=0.5)
     i = t
-    ax3.set_title(f"t = {R[i, 0]:5.1f} s   groups = {int(R[i, 1])}   closest pair = {R[i, 3]:.2f} BL "
+    ax3.set_title(f"t = {R[i, 0]:5.1f} s   groups = {int(R[i, 1])}   closest pair in 3D = {R[i, 3]:.2f} BL "
                   f"(d_safe {a.d_safe:g})", fontsize=10)
     cursor.set_xdata([R[i, 0]] * 2)
 

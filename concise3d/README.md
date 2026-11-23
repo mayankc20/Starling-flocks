@@ -34,6 +34,13 @@ Agents are drawn as arrows of fixed length 2 BL (`--arrow`) centred on the agent
 `d_safe`, two arrows can never touch in 3D (they can overlap in the 2D projection of the video,
 which is depth, not contact).
 
+**Why arrows can still look overlapped in the video.** The video is a 2D picture of a 3D flock, so two agents
+one behind the other along the camera's line of sight land on the same spot on screen. In the d_safe = 5 run,
+594 of 601 frames have at least one pair whose screen positions are closer than an arrow length, but every such
+pair is at least 6.9 BL apart in 3D (median 15 BL). To make this readable, nearer arrows are drawn darker and
+thicker, farther ones faded, and every agent has a drop line to a floor shadow, so you can see that the two are
+at different depths or heights.
+
 **Moving obstacle.** At t = 30 s a sphere of radius 9 BL appears 60 BL ahead of the flock and flies straight at it
 (head-on) at 0.3 BL/step.
 
