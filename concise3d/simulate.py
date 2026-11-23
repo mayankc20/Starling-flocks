@@ -1,6 +1,6 @@
 """Run one flock through a moving obstacle and make the video.
 
-    python simulate.py                     # defaults: N=30, d_safe=3 BL, seed 0 -> out/
+    python simulate.py                     # defaults: N=30, d_safe=3 BL, seed 1 -> out/
     python simulate.py --d_safe 4 --N 20 --seed 2 --out out_d4
 
 Outputs (in --out):  flock_obstacle.mp4   the 3D video, camera follows the flock
@@ -18,8 +18,8 @@ from model import Flock, unit
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--N", type=int, default=30)
-ap.add_argument("--seed", type=int, default=0)
-ap.add_argument("--d_safe", type=float, default=3.0, help="hard minimum distance between agents (BL)")
+ap.add_argument("--seed", type=int, default=1)
+ap.add_argument("--d_safe", type=float, default=3.0, help="minimum distance between agents kept by the velocity-level safety filter (BL)")
 ap.add_argument("--T", type=int, default=1200, help="steps (0.1 s each)")
 ap.add_argument("--launch", type=int, default=300, help="step at which the obstacle appears ahead")
 ap.add_argument("--every", type=int, default=2, help="video frame every k steps")
@@ -42,20 +42,21 @@ for t in range(a.T + 1):
     if t == a.launch:
         f.launch_obstacle(ahead=60.0)
     lab = f.groups(LINK)
-    rows.append((t * f.p["dt"], n_groups(lab), np.bincount(lab).max() / a.N, f.min_distance(), f.obstacle_clearance()))
+    rows.append((t * f.p["dt"], n_groups(lab), np.bincount(lab).max() / a.N, f.min_distance(), f.obstacle_clearance(),
+                 np.linalg.norm(f.V, axis=1).mean(), np.linalg.norm(f.V, axis=1).min()))
     if t % a.every == 0:
         frames.append((f.X.copy(), f.V.copy(), None if f.obs_c is None else f.obs_c.copy(), lab, t))
     if t < a.T:
         f.step()
 R = np.array(rows)
 np.savetxt(os.path.join(a.out, "timeseries.csv"), R, delimiter=",", fmt="%.4f",
-           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL", comments="")
+           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL,mean_speed,min_speed", comments="")
 print(f"min pair distance over run: {R[:, 3].min():.3f} BL (d_safe {a.d_safe}, arrow length {ARROW:.2f})")
 print(f"min gap to obstacle surface: {R[:, 4].min():.3f} BL (limit {a.d_safe / 2})")
 
 # ------------------------------------------------------------------ static plot
 t_launch = a.launch * f.p["dt"]
-fig, ax = plt.subplots(2, 1, figsize=(8, 5.5), sharex=True)
+fig, ax = plt.subplots(3, 1, figsize=(8, 7.5), sharex=True)
 ax[0].step(R[:, 0], R[:, 1], where="post", color="k", lw=1)
 ax[0].set_ylabel("groups (size >= 2)"); ax[0].yaxis.get_major_locator().set_params(integer=True)
 ax0b = ax[0].twinx()
@@ -65,7 +66,10 @@ ax0b.set_ylim(0, 1.05)
 ax[1].plot(R[:, 0], R[:, 3], color="tab:red", lw=1, label="closest pair")
 ax[1].axhline(a.d_safe, color="tab:red", ls="--", lw=1, label=f"d_safe = {a.d_safe:g}")
 ax[1].axhline(ARROW, color="grey", ls=":", lw=1, label=f"drawn arrow = {ARROW:.2f}")
-ax[1].set_ylabel("distance (BL)"); ax[1].set_xlabel("time (s)"); ax[1].legend(loc="upper right", fontsize=8)
+ax[1].set_ylabel("distance (BL)"); ax[1].legend(loc="upper right", fontsize=8)
+ax[2].plot(R[:, 0], 10 * R[:, 5], color="tab:green", lw=1, label="mean")
+ax[2].plot(R[:, 0], 10 * R[:, 6], color="tab:green", lw=0.8, ls="--", label="slowest agent")
+ax[2].set_ylabel("speed (BL/s)"); ax[2].set_xlabel("time (s)"); ax[2].legend(loc="lower right", fontsize=8)
 for x in ax:
     x.axvline(t_launch, color="orange", lw=1)
 ax[0].set_title(f"N = {a.N}, obstacle appears 60 BL ahead at t = {t_launch:g} s (orange)")

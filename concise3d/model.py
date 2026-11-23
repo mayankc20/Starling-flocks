@@ -13,11 +13,14 @@ One step, for every agent i
         escape from close neighbours    amplitude a_avoid * closeness, at the direction away from the neighbour
         steer around the obstacle       amplitude a_obs * closeness, at the direction around the obstacle
      Partners are drawn from those in view in proportion to similarity (delta = attention to other kinds).
-  3. Pick the new heading by the Born rule (probability = |percept|^2), turn toward it by at most omega_max * dt.
-  4. Safety filter (hard): the step is corrected so that no two agents come closer than d_safe (centre to
-     centre) and no agent comes closer than d_safe / 2 to the obstacle surface. This is a position-level
-     projection (repeated pairwise push-apart), the simplest stand-in for a drone's safety controller.
-     The soft escape bumps of step 2 act first, so the filter only catches what they miss.
+  3. Pick the desired heading by the Born rule (probability = |percept|^2); desired velocity = v0 * heading.
+  4. Safety filter at the velocity level (a discrete control barrier function, CBF): the desired velocities
+     are changed as little as possible so that, for every pair, the closing speed is at most
+     gamma * (d - d_safe), and toward the obstacle at most gamma * (gap - d_safe / 2). Then the distance can
+     shrink only geometrically toward d_safe and never cross it.
+  5. Fly: the velocity turns toward the filtered one by at most omega_max * dt and its speed changes by at
+     most a_max per step, within [0, v_max]. Steps 4-5 are repeated so the filtered velocity is one the
+     vehicle can reach. Positions change only by X += V (no jumps).
 """
 import numpy as np
 from scipy.spatial import cKDTree
@@ -29,8 +32,11 @@ PARAMS = dict(
     R=40.0,                    # sight range (BL)
     n=6, w=0.5, delta=0.3,     # partners, heading-vs-bearing weight, attention to other kinds
     lam=50.0, mu=0.0,          # bump sharpness, percept memory (0 = none)
-    v0=0.5, omega_max_deg_s=180.0, dt=0.1,
-    d_safe=3.0,                # HARD minimum centre-to-centre distance (BL); change freely
+    v0=0.5, v_max=1.0,         # cruise and top speed (BL/step)
+    a_max=0.1,                 # max speed change per step (BL/step^2 = 10 BL/s^2, ~3 m/s^2 for a 0.3 m drone)
+    omega_max_deg_s=180.0, dt=0.1,
+    d_safe=3.0,                # minimum centre-to-centre distance (BL) kept by the CBF; change freely
+    gamma=0.2,                 # CBF rate: closing speed <= gamma * (d - d_safe) per step
     r_avoid=6.0,               # soft escape starts inside this distance (kept > d_safe)
     a_avoid=3.0,
     obs_radius=9.0,            # obstacle radius (BL)
@@ -136,44 +142,64 @@ class Flock:
         pick = np.minimum((cdf < rng.random((N, 1)) * cdf[:, -1:]).sum(1), len(self.D) - 1)
         Ud = unit(self.D[pick] + self.spacing * (rng.random((N, 3)) - 0.5))
 
-        # turn by at most omega_max * dt
+        # safety filter (velocity level) + vehicle limits, repeated so both hold together
+        if self.obs_c is not None:
+            self.obs_c = self.obs_c + self.obs_v
+        Vn = p["v0"] * Ud
+        for _ in range(3):
+            Vn = self.fly(V, self.cbf(X, Vn))
+        self.V = Vn
+        self.X = X + Vn                              # positions only ever change by integrating velocity
+
+    def cbf(self, X, Vd, iters=30):
+        """Smallest change of Vd such that every pair closes at most gamma*(d - d_safe) per step
+        (and every agent approaches the obstacle surface at most gamma*(gap - d_safe/2))."""
+        p, V = self.p, Vd.copy()
+        ds, gm = p["d_safe"], p["gamma"]
+        reach = ds + 2 * p["v_max"] / gm            # pairs further apart cannot violate the constraint
+        pr = cKDTree(X).query_pairs(reach, output_type="ndarray")
+        if len(pr):
+            a, b = pr[:, 0], pr[:, 1]
+            e = unit(X[b] - X[a])
+            slack = -gm * (np.linalg.norm(X[b] - X[a], axis=1) - ds)
+        for _ in range(iters):
+            done = True
+            if len(pr):
+                short = slack - ((V[b] - V[a]) * e).sum(1)      # > 0: closing too fast
+                bad = short > 1e-9
+                if bad.any():
+                    c = 0.5 * short[bad, None] * e[bad]
+                    np.add.at(V, a[bad], -c)
+                    np.add.at(V, b[bad], c)
+                    done = False
+            if self.obs_c is not None:
+                out = X - self.obs_c
+                r = np.linalg.norm(out, axis=1)
+                nrm = out / r[:, None]
+                short = -gm * (r - p["obs_radius"] - ds / 2) - ((V - self.obs_v) * nrm).sum(1)
+                bad = short > 1e-9
+                if bad.any():
+                    V[bad] += short[bad, None] * nrm[bad]
+                    done = False
+            if done:
+                break
+        return V
+
+    def fly(self, V, Vd):
+        """Turn V toward Vd by at most omega_max*dt, change speed by at most a_max, speed in [0, v_max]."""
+        p = self.p
+        sp, spd = np.linalg.norm(V, axis=1), np.linalg.norm(Vd, axis=1)
+        U, Ud = unit(V), unit(Vd)
         ang = np.arccos(np.clip((U * Ud).sum(1), -1, 1))
         lim = np.deg2rad(p["omega_max_deg_s"]) * p["dt"]
         t = np.minimum(1.0, lim / np.maximum(ang, 1e-12))
         perp = unit(Ud - (U * Ud).sum(1, keepdims=True) * U)
-        Un = np.where((ang < 1e-9)[:, None], Ud, np.cos(t * ang)[:, None] * U + np.sin(t * ang)[:, None] * perp)
-
-        # move, then the hard safety filter
-        if self.obs_c is not None:
-            self.obs_c = self.obs_c + self.obs_v
-        Xn = self.safety_filter(X + p["v0"] * Un)
-        self.V = Xn - X
-        self.X = Xn
-
-    def safety_filter(self, X, iters=50):
-        d, X = self.p["d_safe"], X.copy()
-        for _ in range(iters):
-            moved = False
-            pr = cKDTree(X).query_pairs(d * 1.0001, output_type="ndarray")
-            if len(pr):
-                a, b = pr[:, 0], pr[:, 1]
-                diff = X[b] - X[a]
-                r = np.linalg.norm(diff, axis=1, keepdims=True)
-                push = 0.5 * (d * 1.001 - r) * unit(diff)
-                np.add.at(X, a, -push)
-                np.add.at(X, b, push)
-                moved = True
-            if self.obs_c is not None:
-                out = X - self.obs_c
-                r = np.linalg.norm(out, axis=1)
-                lim = self.p["obs_radius"] + d / 2
-                bad = r < lim
-                if bad.any():
-                    X[bad] = self.obs_c + unit(out[bad]) * lim * 1.001
-                    moved = True
-            if not moved:
-                break
-        return X
+        Un = np.cos(t * ang)[:, None] * U + np.sin(t * ang)[:, None] * perp
+        Un = np.where(((ang < 1e-9) | (sp < 1e-9))[:, None], Ud, Un)
+        # speed: the part of the desired velocity along the new heading (brake when the turn is not done yet)
+        target = spd * np.maximum(np.cos(ang * (1 - t)), 0.0)
+        s = np.clip(np.clip(target, sp - p["a_max"], sp + p["a_max"]), 0, p["v_max"])
+        return s[:, None] * Un
 
     # ------------------------------------------------------------ measures
     def groups(self, link):
