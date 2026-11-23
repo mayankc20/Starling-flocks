@@ -44,20 +44,24 @@ for t in range(a.T + 1):
         f.launch_obstacle(ahead=60.0)
     lab = f.groups(LINK)
     rows.append((t * f.p["dt"], n_groups(lab), np.bincount(lab).max() / a.N, f.min_distance(), f.obstacle_clearance(),
-                 np.linalg.norm(f.V, axis=1).mean(), np.linalg.norm(f.V, axis=1).min()))
+                 np.linalg.norm(f.V, axis=1).mean(), np.linalg.norm(f.V, axis=1).min(),
+                 np.rad2deg(np.abs(f.cmd[:, 0])).mean(), np.rad2deg(np.abs(f.cmd[:, 1])).mean(),
+                 10 * np.abs(f.cmd[:, 2]).mean() / f.p["dt"], f.overrides / max(f.agent_steps, 1)))
     if t % a.every == 0:
         frames.append((f.X.copy(), f.V.copy(), None if f.obs_c is None else f.obs_c.copy(), lab, t))
     if t < a.T:
         f.step()
 R = np.array(rows)
 np.savetxt(os.path.join(a.out, "timeseries.csv"), R, delimiter=",", fmt="%.4f",
-           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL,mean_speed,min_speed", comments="")
+           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL,mean_speed,min_speed,mean_abs_yaw_rate_deg_s,mean_abs_pitch_rate_deg_s,mean_abs_accel_BL_s2,safety_override_share_so_far", comments="")
 print(f"min pair distance over run: {R[:, 3].min():.3f} BL (d_safe {a.d_safe}, arrow length {ARROW:.2f})")
 print(f"min gap to obstacle surface: {R[:, 4].min():.3f} BL (limit {a.d_safe / 2})")
+print(f"safety backup replaced the model's command in {100 * R[-1, 10]:.2f}% of robot-steps")
+print(f"speed range over run: {10 * R[:, 6].min():.2f} to {10 * R[:, 5].max():.2f} BL/s (mean of means {10 * R[:, 5].mean():.2f})")
 
 # ------------------------------------------------------------------ static plot
 t_launch = a.launch * f.p["dt"]
-fig, ax = plt.subplots(3, 1, figsize=(8, 7.5), sharex=True)
+fig, ax = plt.subplots(4, 1, figsize=(8, 9.5), sharex=True)
 ax[0].step(R[:, 0], R[:, 1], where="post", color="k", lw=1)
 ax[0].set_ylabel("groups (size >= 2)"); ax[0].yaxis.get_major_locator().set_params(integer=True)
 ax0b = ax[0].twinx()
@@ -70,7 +74,11 @@ ax[1].axhline(ARROW, color="grey", ls=":", lw=1, label=f"drawn arrow = {ARROW:.2
 ax[1].set_ylabel("distance (BL)"); ax[1].legend(loc="upper right", fontsize=8)
 ax[2].plot(R[:, 0], 10 * R[:, 5], color="tab:green", lw=1, label="mean")
 ax[2].plot(R[:, 0], 10 * R[:, 6], color="tab:green", lw=0.8, ls="--", label="slowest agent")
-ax[2].set_ylabel("speed (BL/s)"); ax[2].set_xlabel("time (s)"); ax[2].legend(loc="lower right", fontsize=8)
+ax[2].axhline(10 * f.p["s_min"], color="grey", ls=":", lw=1); ax[2].axhline(10 * f.p["s_max"], color="grey", ls=":", lw=1)
+ax[2].set_ylabel("speed (BL/s)"); ax[2].legend(loc="lower right", fontsize=8)
+ax[3].plot(R[:, 0], R[:, 7], lw=0.8, label="|yaw rate| (deg/s)")
+ax[3].plot(R[:, 0], R[:, 8], lw=0.8, label="|pitch rate| (deg/s)")
+ax[3].set_ylabel("mean command"); ax[3].set_xlabel("time (s)"); ax[3].legend(loc="upper right", fontsize=8)
 for x in ax:
     x.axvline(t_launch, color="orange", lw=1)
 ax[0].set_title(f"N = {a.N}, obstacle appears 60 BL ahead at t = {t_launch:g} s (orange)")
