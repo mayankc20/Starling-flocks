@@ -313,6 +313,12 @@ class Flock:
         A = coo_matrix((np.ones(len(pr)), (pr[:, 0], pr[:, 1])), shape=(len(self.X),) * 2)
         return connected_components(A, directed=False)[1]
 
+    def same_kind_share(self, m=6):
+        """Share of each agent's m nearest neighbours that are of its own kind (well mixed: (N/G - 1)/(N - 1))."""
+        m = min(m, len(self.X) - 1)
+        _, nb = cKDTree(self.X).query(self.X, m + 1)
+        return float((self.kind[nb[:, 1:]] == self.kind[:, None]).mean())
+
     def min_distance(self):
         return float(cKDTree(self.X).query(self.X, 2)[0][:, 1].min())
 
