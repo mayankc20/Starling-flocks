@@ -46,7 +46,7 @@ for t in range(a.T + 1):
     rows.append((t * f.p["dt"], n_groups(lab), np.bincount(lab).max() / a.N, f.min_distance(), f.obstacle_clearance(),
                  np.linalg.norm(f.V, axis=1).mean(), np.linalg.norm(f.V, axis=1).min(),
                  np.rad2deg(np.abs(f.cmd[:, 0])).mean(), np.rad2deg(np.abs(f.cmd[:, 1])).mean(),
-                 10 * np.abs(f.cmd[:, 2]).mean() / f.p["dt"], f.overrides / max(f.agent_steps, 1),
+                 10 * np.abs(f.cmd[:, 2]).mean() / f.p["dt"], (f.overrides + f.fallbacks) / max(f.agent_steps, 1),
                  f.same_kind_share()))
     if t % a.every == 0:
         frames.append((f.X.copy(), f.V.copy(), None if f.obs_c is None else f.obs_c.copy(), lab, t))
@@ -54,12 +54,12 @@ for t in range(a.T + 1):
         f.step()
 R = np.array(rows)
 np.savetxt(os.path.join(a.out, "timeseries.csv"), R, delimiter=",", fmt="%.4f",
-           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL,mean_speed,min_speed,mean_abs_yaw_rate_deg_s,mean_abs_pitch_rate_deg_s,mean_abs_accel_BL_s2,safety_override_share_so_far,same_kind_share_of_6_nearest", comments="")
+           header="time_s,groups,largest_group_share,min_pair_distance_BL,min_obstacle_gap_BL,mean_speed,min_speed,mean_abs_yaw_rate_deg_s,mean_abs_pitch_rate_deg_s,mean_abs_accel_BL_s2,share_of_steps_outside_psi_so_far,same_kind_share_of_6_nearest", comments="")
 print(f"min pair distance over run: {R[:, 3].min():.3f} BL (d_safe {a.d_safe}, arrow length {ARROW:.2f})")
 print(f"min gap to obstacle surface: {R[:, 4].min():.3f} BL (limit {a.d_safe / 2})")
 print(f"kinds: {np.bincount(f.kind).tolist()}; same-kind share of 6 nearest: start {R[0, 11]:.2f}, "
       f"mean over run {R[:, 11].mean():.2f}, end {R[-1, 11]:.2f} (well mixed {(a.N / f.p['G'] - 1) / (a.N - 1):.2f})")
-print(f"safety backup replaced the model's command in {100 * R[-1, 10]:.2f}% of robot-steps")
+print(f"decisions made outside psi (all states masked, or old override): {100 * R[-1, 10]:.2f}% of robot-steps")
 print(f"speed range over run: {10 * R[:, 6].min():.2f} to {10 * R[:, 5].max():.2f} BL/s (mean of means {10 * R[:, 5].mean():.2f})")
 
 # ------------------------------------------------------------------ static plot

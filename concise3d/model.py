@@ -13,7 +13,12 @@ Percept of agent i (own heading U_i, own speed s_i):
           + sqrt(1-w) sum_k (+-1) <b_k, s_k|                           bearings, minus sign for another kind
           + sum_j a_avoid g_j <-b_j, s_esc,j|                          collision: turn away and brake
           + a_obs g_obs <around, s_obs|                                obstacle: steer around and slow
-New heading and speed are drawn together from |psi_i|^2 (Born rule). The drone then flies there within its
+Safety is part of the same percept: a soft projector onto the safe part of perceptual space,
+    psi'_i(u, s) = M_i(u, s) psi_i(u, s),   M_i = prod_j sigmoid((closest_j(u, s) - need_j) / eps_mask)
+closest_j(u, s) = closest approach to neighbour j (or the obstacle) within the look-ahead if i flew at s*u and j kept
+its estimated velocity; need_j = min(d_safe + buffer, distance now) (obstacle: radius + d_safe/2 + buffer).
+Equivalently psi' = psi - (1 - M) psi: destructive interference that cancels psi's own unsafe component.
+New heading and speed are drawn together from |psi'_i|^2 (Born rule). The drone then flies there within its
 turn-rate and acceleration limits; positions change only by X += V.
 
 Camera-only measurements of agent i (own velocity v_i from its IMU / optic flow):
@@ -29,9 +34,9 @@ q, acceleration a, all limited (r_max, q_max, a_max; pitch within +-pitch_max; s
 A proportional controller turns the Born-rule target (heading u*, speed s*) into these commands:
     r = clip(wrap(yaw* - yaw) / tau_c), q = clip((pitch* - pitch) / tau_c), a = clip((s* - s) / tau_c).
 
-Backup safety layer (look-ahead on commands): if holding the command for `horizon` steps would bring the robot
-closer than d_safe (+ buffer) to a neighbour predicted from its estimated velocity, the robot takes the safest of
-the 27 extreme commands instead. How often this happens is counted (overrides).
+Outside psi: only the vehicle limits, and a fallback if every state is masked (then the least unsafe state of the
+same grid is taken; counted in `fallbacks`). The older look-ahead override on commands is kept for comparison
+(use_override=True) but is off by default.
 """
 import numpy as np
 from scipy.spatial import cKDTree
@@ -51,7 +56,12 @@ PARAMS = dict(
     kappa_b=3000.0, sigma_r=0.02, m_frames=5, beta=0.2,   # beta: tracker smoothing per frame
     # safety
     d_safe=5.0, r_avoid=10.0, a_avoid=3.0, tau_safe=20.0,     # tau_safe in steps (2 s)
-    horizon=10, buffer=0.5,    # backup look-ahead (steps) and extra distance it keeps (BL)
+    horizon=10, buffer=1.0,    # safety look-ahead (steps) and extra distance kept (BL)
+    horizon_obs=30,            # look-ahead for the obstacle (steps): it is big and closes fast
+    eps_mask=0.1,              # softness of the safety mask (BL)
+    n_dir_mask=500,            # directions on which the mask is evaluated (then mapped to the fine grid)
+    use_mask=True,             # safety as a mask M(u, s) on the wave function (unified framework)
+    use_override=False,        # old separate look-ahead override on commands (off in the unified model)
     # obstacle
     obs_radius=9.0, obs_speed=0.3, obs_sense=12.0, a_obs=4.0,
     n_dir=2000,
@@ -106,11 +116,14 @@ class Flock:
         s = p["delta"] / ((p["G"] - 1) * (1 - p["delta"]))
         self.S = np.where(self.kind[:, None] == self.kind[None, :], 1.0, s)
         self.D, self.spacing = sphere_grid(p["n_dir"])
+        self.Dc, _ = sphere_grid(p["n_dir_mask"])                 # coarser grid on which the mask is computed
+        self.cmap = cKDTree(self.Dc).query(self.D)[1]
         self.sg = np.linspace(p["s_min"], p["s_max"], p["n_speed"])
         self.obs_c = None
         self.obs_v = None
         self.vtrack = None         # each agent's smoothed estimate of every neighbour's velocity
         self.frames = []           # past camera frames (relative position estimates) for velocity / looming
+        self.fallbacks = 0         # robot-steps in which every state of psi was masked as unsafe
         self.overrides = 0         # robot-steps in which the safety backup replaced the model's command
         self.agent_steps = 0
 
@@ -206,7 +219,20 @@ class Flock:
         bd = np.exp(0.5 * p["lam"] * (dirs.astype(np.float32) @ self.D.T.astype(np.float32) - 1))     # (N,K,D)
         bs = np.exp(-(self.sg[None, None, :] - spds[:, :, None]) ** 2 / (2 * p["sig_s"] ** 2))      # (N,K,S)
         psi = np.einsum("nk,nkd,nks->nds", amp.astype(np.float32), bd, bs.astype(np.float32))
-        prob = (psi.astype(float) ** 2).reshape(N, -1)
+        if p["use_mask"]:
+            logm = self.safety_mask(relh, vhat, dist)                                   # (N, D, S)
+            M = np.exp(logm)
+            psi_m = psi.astype(float) * M
+            prob = (psi_m ** 2).reshape(N, -1)
+            # fallback: if (almost) every state is unsafe, take the least unsafe state of the same grid
+            empty = prob.sum(1) < 1e-12 * np.maximum((psi.astype(float) ** 2).reshape(N, -1).sum(1), 1e-300)
+            if empty.any():
+                prob[empty] = 0.0
+                flat = logm.reshape(N, -1)
+                prob[empty, flat[empty].argmax(1)] = 1.0
+                self.fallbacks += int(empty.sum())
+        else:
+            prob = (psi.astype(float) ** 2).reshape(N, -1)
         cdf = np.cumsum(prob, axis=1)
         pick = np.minimum((cdf < rng.random((N, 1)) * cdf[:, -1:]).sum(1), prob.shape[1] - 1)
         di, si = np.divmod(pick, len(self.sg))
@@ -218,8 +244,9 @@ class Flock:
         if self.obs_c is not None:
             self.obs_c = self.obs_c + self.obs_v
         cmd = self.controller(Ud, sd)
-        cmd, over = self.safety(X, cmd, vhat, dist)
-        self.overrides += int(over.sum())
+        if p["use_override"]:
+            cmd, over = self.safety(X, cmd, vhat, dist)
+            self.overrides += int(over.sum())
         self.agent_steps += N
         self.cmd = cmd
         self.apply(cmd)
@@ -255,6 +282,39 @@ class Flock:
         self.yaw = (self.yaw + np.pi) % (2 * np.pi) - np.pi
         self.V = self.speed[:, None] * self.heading(self.yaw, self.pitch)
         self.X = self.X + self.V                     # positions only ever change by flying
+
+    def safety_mask(self, relh, vhat, dist):
+        """log M_i(u, s) on the (direction, speed) grid: for each of the 8 nearest neighbours (and the obstacle), the
+        closest approach within `horizon` steps if i flew at s*u and the neighbour kept its estimated velocity;
+        M = prod_j sigmoid((closest_j - need_j) / eps_mask), need_j = min(d_safe + buffer, current distance)."""
+        p = self.p
+        N, H, eps = len(relh), p["horizon"], p["eps_mask"]
+        rows = np.arange(N)[:, None]
+        k = min(8, N - 1)
+        near = np.argpartition(dist, k - 1, axis=1)[:, :k]
+        C = (self.sg[None, :, None] * self.Dc[:, None, :]).astype(np.float32)           # (Dc, S, 3) candidate velocities
+        P = relh[rows, near].astype(np.float32)                                          # (N, k, 3)
+        W0 = vhat[rows, near].astype(np.float32)
+        need = np.minimum(p["d_safe"] + p["buffer"], dist[rows, near])
+        items = [(P[:, j], W0[:, j], need[:, j], H) for j in range(k)]
+        if self.obs_c is not None:
+            Po = (self.obs_c - self.X).astype(np.float32)
+            g_now = np.linalg.norm(Po, axis=1) - p["obs_radius"]
+            needo = p["obs_radius"] + np.minimum(p["d_safe"] / 2 + p["buffer"], g_now)
+            items.append((Po, np.broadcast_to(self.obs_v.astype(np.float32), (N, 3)), needo, p["horizon_obs"]))
+        logm = np.zeros((N,) + C.shape[:2], np.float32)
+        reach = (p["s_max"] + p["s_max"]) * H
+        for Pj, Vj, nj, Hj in items:
+            if (np.linalg.norm(Pj, axis=1) - nj > reach * Hj / H).all():
+                continue                                                                 # nobody can get close in time
+            Wr = Vj[:, None, None, :] - C[None]                                         # (N, D, S, 3) relative velocity
+            pw = np.einsum("nc,ndsc->nds", Pj, Wr)
+            ww = np.maximum((Wr * Wr).sum(-1), 1e-9)
+            t = np.clip(-pw / ww, 0, Hj)
+            dm = np.linalg.norm(Pj[:, None, None, :] + t[..., None] * Wr, axis=-1)
+            z = (dm - nj[:, None, None]) / eps
+            logm += -np.logaddexp(0, -z)                                                 # log sigmoid
+        return logm[:, self.cmap, :]                                                     # coarse -> fine directions
 
     def safety(self, X, cmd, vhat, dist):
         """Backup, per robot and decentralised (a short look-ahead check). Each robot predicts its own path for
