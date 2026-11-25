@@ -236,6 +236,7 @@ class Flock:
         J = np.einsum("nk,nkd,nks->nds", amp.astype(np.float32), bd, bs.astype(np.float32))         # cue source
         logm = self.safety_mask(relh, vhat, dist) if p["use_mask"] else np.zeros(J.shape, np.float32)
         M = np.exp(logm)
+        self.last_J, self.last_M = J, M                    # kept for plots
         if p["coherent"]:
             # one persistent psi per robot:  i dpsi/dt = H_free psi - i Gamma (psi - J_t) - i W_t psi
             if self.psi is None:
