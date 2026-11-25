@@ -8,7 +8,7 @@ Two files, nothing else needed besides numpy, scipy, matplotlib and ffmpeg.
 | `simulate.py` | Runs one flock through the obstacle; writes the video, a plot (groups, closest pair, speeds, commands) and a CSV. |
 
 ```
-python simulate.py --seed 2                     # N=30, d_safe=5 BL, arrows 2 BL: the video in the project folder
+python simulate.py --seed 4                     # N=30 (3 kinds of 10), d_safe=5 BL, arrows 2 BL: the video in the project folder
 python simulate.py --d_safe 3 --N 20 --seed 1 --out out_d3
 ```
 
@@ -25,19 +25,31 @@ about 3 m/s² for a 0.3 m drone). Pitch stays within ±60°, speed within [s_min
 
 Positions only change by flying; nothing is moved or set directly.
 
-## 2. Percept: a wave function on direction and speed
+## 2. One persistent wave function per robot (driven, damped Schrödinger equation)
 
-A cue with direction d and speed σ is the bump ⟨u, s | d, σ⟩ = exp[(λ/2)(u·d − 1)] · exp[−(s − σ)² / (2 σ_s²)].
+Each robot keeps one wave function ψ_i(u, s) on its perceptual space (direction u × speed s) for the whole flight:
 
-    ψ_i(u, s) = 1·⟨U_i, s_i| + c0·⟨U_i, s0|                       inertia, pull back to cruise speed
-              + √w   Σ_k        ⟨ĥ_k, ŝ_k|                          partners' headings at their speeds
-              + √(1−w) Σ_k (±1) ⟨b_k, ŝ_k|                          bearings, minus sign for another kind
-              + Σ_j a_avoid g_j ⟨−b_j, s_esc|                       turn away; brake if the neighbour is ahead
-              + a_obs g_obs ⟨around, s_obs|                         steer around the obstacle, slow if it is ahead
+    i ∂ψ/∂t = H_free ψ − iΓ (ψ − J_t) − i W_t ψ
 
-n = 6 partners drawn in proportion to similarity (δ = 0.3), w = 0.5, λ = 50, σ_s = 0.6 BL/s, c0 = 2.
-g_j = max(closeness inside r_avoid = 2 d_safe, (τ_safe − τ_j)/τ_safe), with time to contact τ_j and τ_safe = 2 s.
-The Born rule draws a target heading u* and speed s* from |ψ_i|².
+- **J_t = E_t[scene]**, physical → perceptual: what the camera sees now, as a superposition of cue states
+  ⟨u, s | d, σ⟩ = exp[(λ/2)(u·d − 1)] · exp[−(s − σ)² / (2 σ_s²)]:
+
+      J_t = c0 ⟨U_i, s0| + √w Σ_k ⟨ĥ_k, ŝ_k| + √(1−w) Σ_k e^{iφ_k} ⟨b_k, ŝ_k| + Σ_j a_avoid g_j ⟨−b_j, s_esc| + a_obs g_obs ⟨around, s_obs|
+
+  φ_k = π for another kind (the paper's minus sign). n = 6 partners drawn by similarity (δ = 0.3), w = 0.5, λ = 50.
+- **H_free = D (Δ_direction + Δ_speed)**: coherent spreading, so certainty fades when nothing new is seen. ψ is held
+  in the world frame (attitude from the IMU), so the robot's own turning needs no extra term.
+- **Γ**: damping; ψ relaxes toward J_t with memory time 1/Γ = 0.4 s. For fixed cues the steady state is ψ = J
+  (the paper's superposition); Γ → ∞ gives the earlier fresh-ψ-each-step model.
+- **W_t ≥ 0**: absorbing potential on unsafe states (section 5).
+
+Discrete step (dt = 0.1 s): ψ ← e^{−iH_free dt} ψ;  ψ ← e^{−Γdt} ψ + (1 − e^{−Γdt}) J_t;  ψ ← e^{−W dt} ψ.
+So the paper's memory μ = e^{−2Γdt} comes out of the dynamics.
+
+**Read-out, perceptual → physical:** every 0.1 s the next heading and speed are one measurement of the
+heading–speed operator, P(u, s) = ⟨ψ|E(u, s)|ψ⟩ / ⟨ψ|ψ⟩ (Born rule), with no collapse: ψ keeps evolving.
+Measurement rather than the expectation ⟨ψ|û|ψ⟩, because the expectation averages two modes (left and right of an
+obstacle averages to straight into it).
 
 ## 3. Controller: target → commands
 
@@ -51,9 +63,9 @@ The Born rule draws a target heading u* and speed s* from |ψ_i|².
   gives heading ĥ_k and speed ŝ_k
 - time to contact τ_j = (r_j − d_safe)/(−ṙ_j), from looming
 
-## 5. Safety inside the wave function (soft projector)
+## 5. Safety inside the wave function (absorbing potential)
 
-Safety is not a separate layer: it is a soft projector P_safe applied to ψ before the Born rule,
+Safety is not a separate layer: each step ψ is multiplied by e^{−W dt} = M (a soft projector P_safe onto safe states),
 
     ψ'_i(u, s) = M_i(u, s) ψ_i(u, s),   M_i(u, s) = Π_j σ( (closest_j(u, s) − need_j) / ε ),   ε = 0.1 BL
 
@@ -68,17 +80,21 @@ Outside ψ there are only the vehicle's turn and acceleration limits, and a fall
 state is masked (the least unsafe state of the same grid is taken). The earlier look-ahead override on commands
 is still in the code (`use_override=True`) but off.
 
-## Results (unified model, N = 30 as 3 kinds of 10, d_safe 5 BL)
+## Results (persistent ψ, N = 30 as 3 kinds of 10, d_safe 5 BL)
 
-8 runs of 120 s with the obstacle (seeds 0 to 7):
-- closest pair 5.61 to 6.47 BL in every run (d_safe 5), with no separate override
-- closest approach to the obstacle surface 3.01 BL (margin 2.5)
-- the fallback (every state masked) was never needed: 0 of 288,000 robot-decisions
-- split at the obstacle in 4 of 8 runs; all 4 rejoined, 13 to 87 s after the obstacle appeared
-- same-kind share of the 6 nearest neighbours over the last 10 s: 0.32 to 0.78 (fully mixed 0.31)
+6 runs of 120 s with the obstacle for each memory time 1/Γ:
 
-Video (seed 2): closest pair 5.71 BL, closest to the obstacle surface 4.73 BL, no decision outside ψ; the flock
-splits into 2 groups at t ≈ 39 s and is one again at t ≈ 77 s; same-kind share rises from 0.34 to 0.77.
+| memory 1/Γ | closest pair (BL) | closest to obstacle (BL) | fallback | split | rejoined within the run | same-kind share, last 10 s |
+|---|---|---|---|---|---|---|
+| 0.1 s | 5.29–6.61 | 3.88–4.69 | 0 | 1 of 6 | 1 of 1 | 0.35–0.80 |
+| 0.4 s (default) | 6.10–6.52 | 3.90–4.55 | 0 | 2 of 6 | 2 of 2 | 0.36–0.74 |
+| 1 s | 5.70–6.70 | 3.28–4.75 | 0 | 5 of 6 | 3 of 5 | 0.40–0.68 |
+
+d_safe 5, obstacle margin 2.5, fully mixed 0.31. Longer memory makes the flock split more and rejoin more slowly.
+
+Video (seed 4, memory 0.4 s): closest pair 6.51 BL, closest to the obstacle surface 3.94 BL, no decision outside ψ;
+the flock splits into 2 groups at t ≈ 49 s, just after passing the obstacle, and is one group again at t ≈ 79 s;
+same-kind share rises from 0.32 to 0.58.
 
 **Arrows overlapping on screen** is depth, not contact: the video is a 2D picture of a 3D flock. Nearer arrows are
 darker and thicker, and each robot has a drop line to a floor shadow, so overlapping arrows can be seen to be at

@@ -59,6 +59,10 @@ PARAMS = dict(
     horizon=10, buffer=1.0,    # safety look-ahead (steps) and extra distance kept (BL)
     horizon_obs=30,            # look-ahead for the obstacle (steps): it is big and closes fast
     eps_mask=0.1,              # softness of the safety mask (BL)
+    coherent=True,             # one persistent psi per robot (driven, damped Schrodinger); False = fresh psi each step
+    gamma_mem=2.5,             # damping rate Gamma (1/s): memory time 1/Gamma = 0.4 s
+    D_spread=0.05,             # coherent spreading per step (H_free = -D * Laplacian on direction x speed)
+    own_cue=0.0,               # own-heading cue in J (not needed when psi persists)
     n_dir_mask=500,            # directions on which the mask is evaluated (then mapped to the fine grid)
     use_mask=True,             # safety as a mask M(u, s) on the wave function (unified framework)
     use_override=False,        # old separate look-ahead override on commands (off in the unified model)
@@ -123,6 +127,15 @@ class Flock:
         self.obs_v = None
         self.vtrack = None         # each agent's smoothed estimate of every neighbour's velocity
         self.frames = []           # past camera frames (relative position estimates) for velocity / looming
+        self.psi = None            # persistent wave function (N, D, S), complex
+        self.certainty = np.ones(N)
+        # graph Laplacian on the direction grid (6 nearest) and 1D Laplacian on speed, for H_free
+        nb = cKDTree(self.D).query(self.D, 7)[1][:, 1:]
+        Dn = len(self.D)
+        A = coo_matrix((np.ones(Dn * 6), (np.repeat(np.arange(Dn), 6), nb.ravel())), shape=(Dn, Dn)).tocsr()
+        A = ((A + A.T) > 0).astype(np.float32)
+        from scipy.sparse import diags
+        self.Ld = (diags(np.asarray(A.sum(1)).ravel()) - A).tocsr().astype(np.float32)
         self.fallbacks = 0         # robot-steps in which every state of psi was masked as unsafe
         self.overrides = 0         # robot-steps in which the safety backup replaced the model's command
         self.agent_steps = 0
@@ -215,24 +228,39 @@ class Flock:
         dirs = np.concatenate(dirs, 1)
         spds = np.concatenate(spds, 1)
         amp = np.concatenate(amp, 1)
+        if p["coherent"]:
+            amp[:, 0] *= p["own_cue"]                      # inertia now comes from the persistent psi itself
         amp = amp / np.linalg.norm(amp[:, :2 + 2 * k], axis=1, keepdims=True)
         bd = np.exp(0.5 * p["lam"] * (dirs.astype(np.float32) @ self.D.T.astype(np.float32) - 1))     # (N,K,D)
         bs = np.exp(-(self.sg[None, None, :] - spds[:, :, None]) ** 2 / (2 * p["sig_s"] ** 2))      # (N,K,S)
-        psi = np.einsum("nk,nkd,nks->nds", amp.astype(np.float32), bd, bs.astype(np.float32))
-        if p["use_mask"]:
-            logm = self.safety_mask(relh, vhat, dist)                                   # (N, D, S)
-            M = np.exp(logm)
-            psi_m = psi.astype(float) * M
-            prob = (psi_m ** 2).reshape(N, -1)
-            # fallback: if (almost) every state is unsafe, take the least unsafe state of the same grid
-            empty = prob.sum(1) < 1e-12 * np.maximum((psi.astype(float) ** 2).reshape(N, -1).sum(1), 1e-300)
-            if empty.any():
-                prob[empty] = 0.0
-                flat = logm.reshape(N, -1)
-                prob[empty, flat[empty].argmax(1)] = 1.0
-                self.fallbacks += int(empty.sum())
+        J = np.einsum("nk,nkd,nks->nds", amp.astype(np.float32), bd, bs.astype(np.float32))         # cue source
+        logm = self.safety_mask(relh, vhat, dist) if p["use_mask"] else np.zeros(J.shape, np.float32)
+        M = np.exp(logm)
+        if p["coherent"]:
+            # one persistent psi per robot:  i dpsi/dt = H_free psi - i Gamma (psi - J_t) - i W_t psi
+            if self.psi is None:
+                self.psi = J.astype(np.complex64)
+            psi = self.free_evolution(self.psi)                                          # e^{-i H_free dt}
+            decay = np.exp(-p["gamma_mem"] * p["dt"])
+            psi = decay * psi + (1 - decay) * J                                          # damped drive toward J_t
+            psi = psi * M                                                                 # absorbing potential e^{-W dt}
+            self.psi = psi.astype(np.complex64)
+            prob0 = np.abs(J.astype(float)) ** 2
+            prob = (np.abs(psi) ** 2).astype(float).reshape(N, -1)
         else:
-            prob = (psi.astype(float) ** 2).reshape(N, -1)
+            prob0 = J.astype(float) ** 2
+            prob = ((J.astype(float) * M) ** 2).reshape(N, -1)
+        # read-out = measurement of the heading-speed operator: P(u, s) = <psi|E(u, s)|psi> / <psi|psi> (no collapse)
+        # fallback: if (almost) every state is unsafe, take the least unsafe state of the same grid
+        empty = prob.sum(1) < 1e-12 * np.maximum(prob0.reshape(N, -1).sum(1), 1e-300)
+        if empty.any():
+            prob[empty] = 0.0
+            flat = logm.reshape(N, -1)
+            prob[empty, flat[empty].argmax(1)] = 1.0
+            self.fallbacks += int(empty.sum())
+        # certainty: length of the expectation of the heading operator <psi|u|psi> / <psi|psi>
+        pd = prob.reshape(N, len(self.D), -1).sum(2)
+        self.certainty = np.linalg.norm(pd @ self.D, axis=1) / np.maximum(pd.sum(1), 1e-300)
         cdf = np.cumsum(prob, axis=1)
         pick = np.minimum((cdf < rng.random((N, 1)) * cdf[:, -1:]).sum(1), prob.shape[1] - 1)
         di, si = np.divmod(pick, len(self.sg))
@@ -282,6 +310,20 @@ class Flock:
         self.yaw = (self.yaw + np.pi) % (2 * np.pi) - np.pi
         self.V = self.speed[:, None] * self.heading(self.yaw, self.pitch)
         self.X = self.X + self.V                     # positions only ever change by flying
+
+    def free_evolution(self, psi):
+        """e^{-i H_free dt} psi with H_free = D (L_dir + L_speed), second-order Taylor (D small)."""
+        p = self.p
+        N, Dn, S = psi.shape
+
+        def H(x):
+            y = (self.Ld @ x.transpose(1, 0, 2).reshape(Dn, -1)).reshape(Dn, N, S).transpose(1, 0, 2)
+            xs = np.pad(x, ((0, 0), (0, 0), (1, 1)), mode="edge")
+            y = y + (2 * x - xs[:, :, :-2] - xs[:, :, 2:])
+            return p["D_spread"] * y
+
+        h1 = H(psi)
+        return psi - 1j * h1 - 0.5 * H(h1)
 
     def safety_mask(self, relh, vhat, dist):
         """log M_i(u, s) on the (direction, speed) grid: for each of the 8 nearest neighbours (and the obstacle), the
